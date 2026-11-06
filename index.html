@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Photo EXIF Viewer & Privacy Cleaner</title>
+  
+  <!-- Leaflet CSS for Maps -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --card-bg: #1e293b;
+      --text-color: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-color: #38bdf8;
+      --accent-hover: #0284c7;
+      --border-color: #334155;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      line-height: 1.5;
+      padding: 2rem 1rem;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    header h1 { font-size: 2.2rem; margin-bottom: 0.5rem; }
+    header p { color: var(--text-muted); }
+
+    /* Drop Zone */
+    .drop-zone {
+      border: 2px dashed var(--accent-color);
+      border-radius: 12px;
+      padding: 3rem 1.5rem;
+      text-align: center;
+      background-color: var(--card-bg);
+      cursor: pointer;
+      transition: background-color 0.2s, border-color 0.2s;
+    }
+
+    .drop-zone:hover, .drop-zone.dragover {
+      background-color: #26334d;
+      border-color: #7dd3fc;
+    }
+
+    .drop-zone input { display: none; }
+
+    /* Results Section */
+    .results {
+      display: none;
+      margin-top: 2rem;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+    }
+
+    @media (min-width: 768px) {
+      .results { grid-template-columns: 1fr 1fr; }
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+    }
+
+    .card h2 {
+      font-size: 1.25rem;
+      margin-bottom: 1rem;
+      color: var(--accent-color);
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.5rem;
+    }
+
+    .preview-img {
+      width: 100%;
+      max-height: 350px;
+      object-fit: contain;
+      border-radius: 8px;
+      background-color: #000;
+    }
+
+    .actions {
+      margin-top: 1rem;
+      display: flex;
+      gap: 10px;
+    }
+
+    .btn {
+      flex: 1;
+      background-color: var(--accent-color);
+      color: #000;
+      font-weight: bold;
+      border: none;
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background-color 0.2s;
+    }
+
+    .btn:hover { background-color: var(--accent-hover); color: #fff; }
+
+    /* Metadata Table */
+    .meta-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+
+    .meta-table th, .meta-table td {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid var(--border-color);
+      text-align: left;
+    }
+
+    .meta-table th { color: var(--text-muted); width: 40%; font-weight: normal; }
+
+    /* Map styling */
+    #map {
+      height: 250px;
+      border-radius: 8px;
+      margin-top: 1rem;
+    }
+
+    .no-data { color: var(--text-muted); font-style: italic; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <header>
+      <h1>📸 EXIF Inspector & Privacy Cleaner</h1>
+      <p>Drag & drop a photo to inspect hidden camera settings, timestamp, location data, or strip metadata for privacy.</p>
+    </header>
+
+    <!-- Upload Dropzone -->
+    <div class="drop-zone" id="dropZone">
+      <p>📁 Drag and drop an image here, or <strong>click to select</strong></p>
+      <input type="file" id="fileInput" accept="image/jpeg, image/tiff">
+    </div>
+
+    <!-- Output Section -->
+    <div class="results" id="resultsSection">
+      
+      <!-- Image & Actions -->
+      <div class="card">
+        <h2>Image Preview</h2>
+        <img id="imagePreview" class="preview-img" alt="Uploaded Preview">
+        <div class="actions">
+          <button class="btn" id="downloadCleanBtn">Strip EXIF & Download</button>
+        </div>
+      </div>
+
+      <!-- EXIF Details -->
+      <div class="card">
+        <h2>Metadata</h2>
+        <table class="meta-table">
+          <tbody id="metadataBody"></tbody>
+        </table>
+        
+        <div id="mapSection" style="display: none;">
+          <h2 style="margin-top: 1.5rem;">GPS Location</h2>
+          <div id="map"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- External Libraries: EXIF Parser and Leaflet Maps -->
+  <script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const resultsSection = document.getElementById('resultsSection');
+    const imagePreview = document.getElementById('imagePreview');
+    const metadataBody = document.getElementById('metadataBody');
+    const mapSection = document.getElementById('mapSection');
+    const downloadCleanBtn = document.getElementById('downloadCleanBtn');
+
+    let currentFile = null;
+    let map = null;
+
+    // Trigger file dialog on click
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    // Drag-and-drop handlers
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    function handleFile(file) {
+      // Security Check: File type verification
+      if (!file.type.match('image/jpeg') && !file.type.match('image/tiff')) {
+        alert('Please upload a JPEG or TIFF image (these formats typically store EXIF data).');
+        return;
+      }
+
+      // Security Check: File size limit (Max 20MB) to prevent memory exhaustion
+      const MAX_SIZE_MB = 20;
+      if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+        alert(`File is too large. Please upload an image under ${MAX_SIZE_MB}MB.`);
+        return;
+      }
+
+      currentFile = file;
+      const reader = new FileReader();
+
+      reader.onload = (e) => {
+        imagePreview.src = e.target.result;
+        resultsSection.style.display = 'grid';
+        extractExif(file);
+      };
+
+      reader.readAsDataURL(file);
+    }
+
+    // Securely add rows using textContent to prevent XSS attacks via crafted metadata
+    function addMetadataRow(key, value) {
+      const row = document.createElement('tr');
+      
+      const th = document.createElement('th');
+      th.textContent = key;
+      
+      const td = document.createElement('td');
+      td.textContent = value;
+      
+      row.appendChild(th);
+      row.appendChild(td);
+      metadataBody.appendChild(row);
+    }
+
+    function extractExif(file) {
+      metadataBody.innerHTML = '';
+      mapSection.style.display = 'none';
+
+      EXIF.getData(file, function() {
+        const tags = EXIF.getAllTags(this);
+        
+        if (Object.keys(tags).length === 0) {
+          const row = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 2;
+          td.className = 'no-data';
+          td.textContent = 'No EXIF metadata found in this image.';
+          row.appendChild(td);
+          metadataBody.appendChild(row);
+          return;
+        }
+
+        const dataPoints = {
+          "Camera Make": tags.Make,
+          "Camera Model": tags.Model,
+          "Date Taken": tags.DateTimeOriginal || tags.DateTime,
+          "Aperture": tags.FNumber ? `f/${tags.FNumber}` : null,
+          "Exposure Time": tags.ExposureTime ? `${tags.ExposureTime.numerator}/${tags.ExposureTime.denominator} sec` : null,
+          "ISO Speed": tags.ISOSpeedRatings,
+          "Focal Length": tags.FocalLength ? `${tags.FocalLength} mm` : null,
+          "Software": tags.Software,
+          "Image Size": `${tags.PixelXDimension || file.width || 'N/A'} x ${tags.PixelYDimension || file.height || 'N/A'} px`
+        };
+
+        for (const [key, value] of Object.entries(dataPoints)) {
+          if (value !== null && value !== undefined && value !== "") {
+            addMetadataRow(key, value);
+          }
+        }
+
+        // Check for GPS coordinates and parse safely as floats
+        if (tags.GPSLatitude && tags.GPSLongitude) {
+          const lat = parseFloat(convertDMSToDD(tags.GPSLatitude, tags.GPSLatitudeRef));
+          const lng = parseFloat(convertDMSToDD(tags.GPSLongitude, tags.GPSLongitudeRef));
+          
+          if (!isNaN(lat) && !isNaN(lng)) {
+            addMetadataRow("Latitude", lat.toFixed(6));
+            addMetadataRow("Longitude", lng.toFixed(6));
+            renderMap(lat, lng);
+          }
+        }
+      });
+    }
+
+    // Convert Degrees/Minutes/Seconds to Decimal Degrees for Leaflet
+    function convertDMSToDD(dms, ref) {
+      let dd = Number(dms[0]) + Number(dms[1]) / 60 + Number(dms[2]) / 3600;
+      if (ref === "S" || ref === "W") dd *= -1;
+      return dd;
+    }
+
+    function renderMap(lat, lng) {
+      mapSection.style.display = 'block';
+
+      if (map) {
+        map.remove(); // Reset existing map instance
+      }
+
+      map = L.map('map').setView([lat, lng], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+
+      L.marker([lat, lng]).addTo(map)
+        .bindPopup('Photo location')
+        .openPopup();
+    }
+
+    // Strip Metadata & Download (re-draws image to canvas to remove EXIF)
+    downloadCleanBtn.addEventListener('click', () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      canvas.width = imagePreview.naturalWidth;
+      canvas.height = imagePreview.naturalHeight;
+
+      // Drawing to HTML5 Canvas discards EXIF data automatically
+      ctx.drawImage(imagePreview, 0, 0);
+
+      const cleanedImageUrl = canvas.toDataURL('image/jpeg', 0.92);
+      
+      const link = document.createElement('a');
+      link.download = `clean_${currentFile ? currentFile.name : 'photo.jpg'}`;
+      link.href = cleanedImageUrl;
+      link.click();
+    });
+  </script>
+</body>
+</html>
